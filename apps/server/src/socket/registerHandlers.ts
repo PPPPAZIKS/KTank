@@ -25,7 +25,8 @@ export function registerSocketHandlers(
       }
       const room = manager.getOrCreateRoom(request.roomId);
       if (!room.addPlayer(socket.id, request.name)) {
-        callback({ ok: false, message: '房间已满' });
+        const message = room.snapshot().status === 'waiting' ? '房间已满' : '对局已经开始';
+        callback({ ok: false, message });
         return;
       }
       socket.data.roomId = request.roomId;
@@ -55,16 +56,32 @@ export function registerSocketHandlers(
       manager.getRoom(roomId)?.fire(playerId);
     });
 
-    socket.on('restart', () => {
+    socket.on('startGame', () => {
       const roomId = socket.data.roomId;
-      if (!roomId) {
+      const playerId = socket.data.playerId;
+      if (!roomId || !playerId) {
         return;
       }
       const room = manager.getRoom(roomId);
-      room?.restart();
-      if (room) {
-        io.to(roomId).emit('snapshot', room.snapshot());
+      if (!room?.start(playerId)) {
+        socket.emit('notice', '只有房主能在 2～4 人到齐后开始游戏');
+        return;
       }
+      io.to(roomId).emit('snapshot', room.snapshot());
+    });
+
+    socket.on('restart', () => {
+      const roomId = socket.data.roomId;
+      const playerId = socket.data.playerId;
+      if (!roomId || !playerId) {
+        return;
+      }
+      const room = manager.getRoom(roomId);
+      if (!room?.restart(playerId)) {
+        socket.emit('notice', '只有房主能在本局结束后重新开始');
+        return;
+      }
+      io.to(roomId).emit('snapshot', room.snapshot());
     });
 
     socket.on('disconnect', () => {

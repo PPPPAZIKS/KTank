@@ -38,6 +38,10 @@ export class GameClient {
     this.socket.emit('fire');
   }
 
+  startGame(): void {
+    this.socket.emit('startGame');
+  }
+
   restart(): void {
     this.socket.emit('restart');
   }

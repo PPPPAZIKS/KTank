@@ -44,6 +44,31 @@ describe('Socket 房间链路', () => {
     await expect(disconnectedSnapshot).resolves.toBe(1);
   });
 
+  it('允许四个客户端加入并拒绝第五个客户端', async () => {
+    const server = createKTankServer(0);
+    const port = await server.start();
+    stopServer = server.stop;
+    const clients = Array.from({ length: 5 }, () => createClient(`http://localhost:${port}`));
+    sockets.push(...clients);
+    for (let index = 0; index < 4; index += 1) {
+      const client = clients[index];
+      if (!client) {
+        throw new Error('客户端创建失败');
+      }
+      const response = await join(client, 'ROOM4', `Player ${index + 1}`);
+      expect(response.ok).toBe(true);
+      if (response.ok) {
+        expect(response.snapshot.players).toHaveLength(index + 1);
+      }
+    }
+    const fifth = clients[4];
+    if (!fifth) {
+      throw new Error('客户端创建失败');
+    }
+    const rejected = await join(fifth, 'ROOM4', 'Player 5');
+    expect(rejected).toEqual({ ok: false, message: '房间已满' });
+  });
+
   it('拒绝无效房间号', async () => {
     const server = createKTankServer(0);
     const port = await server.start();

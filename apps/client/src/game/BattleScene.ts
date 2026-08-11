@@ -29,7 +29,7 @@ export class BattleScene extends Phaser.Scene {
   constructor(
     private readonly client: GameClient,
     private readonly playerId: string,
-    private readonly onResult: (winnerId: string | null) => void
+    private readonly onSnapshot: (snapshot: GameSnapshot) => void
   ) {
     super('battle');
   }
@@ -55,7 +55,7 @@ export class BattleScene extends Phaser.Scene {
 
   update(): void {
     const localPlayer = this.latestSnapshot?.players.find((player) => player.id === this.playerId);
-    if (!localPlayer || !localPlayer.alive) {
+    if (!localPlayer || !localPlayer.alive || this.latestSnapshot?.status !== 'playing') {
       return;
     }
     const pointer = this.input.activePointer;
@@ -145,7 +145,7 @@ export class BattleScene extends Phaser.Scene {
       view.setPosition(bullet.x, bullet.y);
     }
 
-    this.onResult(snapshot.winnerId);
+    this.onSnapshot(snapshot);
   }
 
   private createTank(id: string, color: number, name: string): TankView {

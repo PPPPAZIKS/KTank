@@ -28,6 +28,7 @@ export interface ObstacleState extends Vector2 {
 export interface GameSnapshot {
   roomId: string;
   status: GameStatus;
+  hostId: string | null;
   players: TankState[];
   bullets: BulletState[];
   obstacles: ObstacleState[];
@@ -57,6 +58,7 @@ export interface ClientToServerEvents {
   joinRoom: (request: JoinRequest, callback: (response: JoinResponse) => void) => void;
   playerInput: (input: PlayerInput) => void;
   fire: () => void;
+  startGame: () => void;
   restart: () => void;
 }
 

@@ -15,9 +15,15 @@ function input(overrides: Partial<Parameters<GameRoom['setInput']>[1]> = {}) {
 }
 
 describe('GameRoom', () => {
-  it('限制玩家不越过地图边界', () => {
+  it('等待房主开局后才允许移动', () => {
     const room = new GameRoom('ABC');
     room.addPlayer('one', 'One');
+    room.addPlayer('two', 'Two');
+    room.setInput('one', input({ left: true }));
+    room.update(10);
+    expect(room.snapshot().players[0]?.x).toBe(90);
+    expect(room.start('two')).toBe(false);
+    expect(room.start('one')).toBe(true);
     room.setInput('one', input({ left: true }));
     room.update(10);
     expect(room.snapshot().players[0]?.x).toBe(TANK_RADIUS);
@@ -27,6 +33,7 @@ describe('GameRoom', () => {
     const room = new GameRoom('ABC');
     room.addPlayer('one', 'One');
     room.addPlayer('two', 'Two');
+    room.start('one');
     const players = room.snapshot().players;
     const first = players.find((player) => player.id === 'one');
     const second = players.find((player) => player.id === 'two');
@@ -52,11 +59,32 @@ describe('GameRoom', () => {
     expect(snapshot.status).toBe('finished');
   });
 
-  it('移除断线玩家', () => {
+  it('支持四个唯一槽位并在断线后安全补位', () => {
+    const room = new GameRoom('ABC');
+    for (let index = 1; index <= 4; index += 1) {
+      expect(room.addPlayer(`p${index}`, `Player ${index}`)).toBe(true);
+    }
+    expect(room.addPlayer('p5', 'Player 5')).toBe(false);
+    const fullSnapshot = room.snapshot();
+    expect(new Set(fullSnapshot.players.map((player) => `${player.x},${player.y}`)).size).toBe(4);
+    expect(new Set(fullSnapshot.players.map((player) => player.color)).size).toBe(4);
+
+    const departed = fullSnapshot.players.find((player) => player.id === 'p2');
+    room.removePlayer('p2');
+    expect(room.addPlayer('p5', 'Player 5')).toBe(true);
+    const replacement = room.snapshot().players.find((player) => player.id === 'p5');
+    expect(replacement?.x).toBe(departed?.x);
+    expect(replacement?.y).toBe(departed?.y);
+    expect(replacement?.color).toBe(departed?.color);
+  });
+
+  it('移除断线玩家并转移房主', () => {
     const room = new GameRoom('ABC');
     room.addPlayer('one', 'One');
     room.addPlayer('two', 'Two');
-    room.removePlayer('two');
-    expect(room.snapshot().players.map((player) => player.id)).toEqual(['one']);
+    room.removePlayer('one');
+    const snapshot = room.snapshot();
+    expect(snapshot.players.map((player) => player.id)).toEqual(['two']);
+    expect(snapshot.hostId).toBe('two');
   });
 });

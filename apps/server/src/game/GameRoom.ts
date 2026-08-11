@@ -11,6 +11,7 @@ import {
   TANK_SPEED,
   type BulletState,
   type GameSnapshot,
+  type GameStatus,
   type PlayerInput,
   type TankState
 } from '@ktank/shared';
@@ -18,6 +19,7 @@ import { randomUUID } from 'node:crypto';
 import { circleHitsRectangle, circlesOverlap } from './collision.js';
 
 interface PlayerRecord extends TankState {
+  slot: number;
   input: PlayerInput;
   lastFireAt: number;
 }
@@ -48,6 +50,8 @@ export class GameRoom {
   readonly id: string;
   private readonly players = new Map<string, PlayerRecord>();
   private readonly bullets = new Map<string, BulletRecord>();
+  private status: GameStatus = 'waiting';
+  private hostId: string | null = null;
   private winnerId: string | null = null;
 
   constructor(id: string) {
@@ -59,42 +63,64 @@ export class GameRoom {
   }
 
   addPlayer(id: string, name: string): boolean {
-    if (this.players.size >= MAX_PLAYERS || this.players.has(id)) {
+    if (this.status !== 'waiting' || this.players.size >= MAX_PLAYERS || this.players.has(id)) {
       return false;
     }
-    const spawn = SPAWNS[this.players.size] ?? SPAWNS[0];
-    if (!spawn) {
+    const usedSlots = new Set([...this.players.values()].map((player) => player.slot));
+    const slot = SPAWNS.findIndex((_, index) => !usedSlots.has(index));
+    const spawn = SPAWNS[slot];
+    if (slot < 0 || !spawn) {
       return false;
     }
     this.players.set(id, {
       id,
       name,
+      slot,
       x: spawn.x,
       y: spawn.y,
       angle: spawn.angle,
       health: PLAYER_MAX_HEALTH,
       alive: true,
-      color: COLORS[this.players.size] ?? 0xffffff,
+      color: COLORS[slot] ?? 0xffffff,
       input: { ...EMPTY_INPUT, angle: spawn.angle },
       lastFireAt: 0
     });
-    this.winnerId = null;
+    this.hostId ??= id;
     return true;
   }
 
   removePlayer(id: string): void {
+    const wasPlaying = this.status === 'playing';
     this.players.delete(id);
     for (const [bulletId, bullet] of this.bullets) {
       if (bullet.ownerId === id) {
         this.bullets.delete(bulletId);
       }
     }
-    this.resolveWinner();
+    if (this.hostId === id) {
+      this.hostId = this.players.keys().next().value ?? null;
+    }
+    if (wasPlaying) {
+      this.resolveWinner();
+    }
+    if (this.players.size < 2 && this.status !== 'finished') {
+      this.status = 'waiting';
+      this.bullets.clear();
+    }
+  }
+
+  start(requesterId: string): boolean {
+    if (this.status !== 'waiting' || requesterId !== this.hostId || this.players.size < 2) {
+      return false;
+    }
+    this.resetPlayers();
+    this.status = 'playing';
+    return true;
   }
 
   setInput(id: string, input: PlayerInput): void {
     const player = this.players.get(id);
-    if (!player || !player.alive || input.sequence < player.input.sequence) {
+    if (this.status !== 'playing' || !player || !player.alive || input.sequence < player.input.sequence) {
       return;
     }
     player.input = input;
@@ -102,7 +128,7 @@ export class GameRoom {
 
   fire(id: string, now = Date.now()): boolean {
     const player = this.players.get(id);
-    if (!player || !player.alive || this.winnerId || now - player.lastFireAt < FIRE_COOLDOWN_MS) {
+    if (this.status !== 'playing' || !player || !player.alive || now - player.lastFireAt < FIRE_COOLDOWN_MS) {
       return false;
     }
     player.lastFireAt = now;
@@ -122,7 +148,7 @@ export class GameRoom {
   }
 
   update(deltaSeconds: number): void {
-    if (this.winnerId) {
+    if (this.status !== 'playing') {
       return;
     }
     for (const player of this.players.values()) {
@@ -132,31 +158,20 @@ export class GameRoom {
     this.resolveWinner();
   }
 
-  restart(): void {
-    this.bullets.clear();
-    this.winnerId = null;
-    let index = 0;
-    for (const player of this.players.values()) {
-      const spawn = SPAWNS[index] ?? SPAWNS[0];
-      if (!spawn) {
-        continue;
-      }
-      player.x = spawn.x;
-      player.y = spawn.y;
-      player.angle = spawn.angle;
-      player.health = PLAYER_MAX_HEALTH;
-      player.alive = true;
-      player.input = { ...EMPTY_INPUT, angle: spawn.angle };
-      player.lastFireAt = 0;
-      index += 1;
+  restart(requesterId: string): boolean {
+    if (this.status !== 'finished' || requesterId !== this.hostId || this.players.size < 2) {
+      return false;
     }
+    this.resetPlayers();
+    this.status = 'playing';
+    return true;
   }
 
   snapshot(now = Date.now()): GameSnapshot {
-    const status = this.winnerId ? 'finished' : this.players.size >= 2 ? 'playing' : 'waiting';
     return {
       roomId: this.id,
-      status,
+      status: this.status,
+      hostId: this.hostId,
       players: [...this.players.values()].map((player) => ({
         id: player.id,
         name: player.name,
@@ -179,6 +194,24 @@ export class GameRoom {
     };
   }
 
+  private resetPlayers(): void {
+    this.bullets.clear();
+    this.winnerId = null;
+    for (const player of this.players.values()) {
+      const spawn = SPAWNS[player.slot];
+      if (!spawn) {
+        continue;
+      }
+      player.x = spawn.x;
+      player.y = spawn.y;
+      player.angle = spawn.angle;
+      player.health = PLAYER_MAX_HEALTH;
+      player.alive = true;
+      player.input = { ...EMPTY_INPUT, angle: spawn.angle };
+      player.lastFireAt = 0;
+    }
+  }
+
   private updatePlayer(player: PlayerRecord, deltaSeconds: number): void {
     if (!player.alive) {
       return;
@@ -194,8 +227,11 @@ export class GameRoom {
     const nextX = Math.max(TANK_RADIUS, Math.min(GAME_WIDTH - TANK_RADIUS, player.x + directionX * TANK_SPEED * deltaSeconds));
     const nextY = Math.max(TANK_RADIUS, Math.min(GAME_HEIGHT - TANK_RADIUS, player.y + directionY * TANK_SPEED * deltaSeconds));
     const nextPosition = { x: nextX, y: nextY };
-    const blocked = OBSTACLES.some((obstacle) => circleHitsRectangle(nextPosition, TANK_RADIUS, obstacle));
-    if (!blocked) {
+    const hitsObstacle = OBSTACLES.some((obstacle) => circleHitsRectangle(nextPosition, TANK_RADIUS, obstacle));
+    const hitsPlayer = [...this.players.values()].some(
+      (other) => other.id !== player.id && other.alive && circlesOverlap(nextPosition, TANK_RADIUS, other, TANK_RADIUS)
+    );
+    if (!hitsObstacle && !hitsPlayer) {
       player.x = nextX;
       player.y = nextY;
     }
@@ -226,13 +262,14 @@ export class GameRoom {
   }
 
   private resolveWinner(): void {
-    if (this.players.size < 2) {
-      this.winnerId = null;
+    if (this.status !== 'playing') {
       return;
     }
     const alivePlayers = [...this.players.values()].filter((player) => player.alive);
-    if (alivePlayers.length === 1) {
+    if (alivePlayers.length <= 1) {
+      this.status = 'finished';
       this.winnerId = alivePlayers[0]?.id ?? null;
+      this.bullets.clear();
     }
   }
 }
