@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>KTank</title>
+  </head>
+  <body>
+    <main id="app">
+      <section id="lobby" class="panel">
+        <p class="eyebrow">ONLINE ARENA</p>
+        <h1>KTANK</h1>
+        <p class="subtitle">服务端权威的实时坦克对战</p>
+        <form id="join-form">
+          <label>昵称<input id="name" maxlength="16" value="Player" required /></label>
+          <label>房间号<input id="room" maxlength="12" value="TANK01" required /></label>
+          <button type="submit">进入战场</button>
+        </form>
+        <p id="error" role="alert"></p>
+      </section>
+      <section id="arena" hidden>
+        <header>
+          <div><strong id="room-label"></strong><span id="connection">连接中</span></div>
+          <div class="controls">WASD / 方向键移动 · 鼠标瞄准 · 点击或空格射击</div>
+        </header>
+        <div id="game"></div>
+        <div id="result" hidden>
+          <strong id="result-text"></strong>
+          <button id="restart" type="button">再来一局</button>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
