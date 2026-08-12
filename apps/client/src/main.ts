@@ -1,8 +1,35 @@
 import { GAME_HEIGHT, GAME_WIDTH, type GameSnapshot } from '@ktank/shared';
+import lottie, { type AnimationItem } from 'lottie-web';
 import Phaser from 'phaser';
 import { BattleScene } from './game/BattleScene';
 import { GameClient } from './network';
+import winDataRaw from './assets/effects/win/data.json';
+import winImg0 from './assets/effects/win/images/img_0.png';
+import winImg1 from './assets/effects/win/images/img_1.png';
+import winImg2 from './assets/effects/win/images/img_2.png';
+import winImg3 from './assets/effects/win/images/img_3.png';
+import winImg4 from './assets/effects/win/images/img_4.png';
 import './styles.css';
+
+// 将 assets 中的图片 URL 注入到 animationData，避免 Vite hash 后路径失效
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const winImageMap: Record<string, string> = {
+  'img_0.png': winImg0,
+  'img_1.png': winImg1,
+  'img_2.png': winImg2,
+  'img_3.png': winImg3,
+  'img_4.png': winImg4,
+};
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const winData = JSON.parse(JSON.stringify(winDataRaw)) as any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+for (const asset of winData.assets as any[]) {
+  if (asset.p && winImageMap[asset.p]) {
+    asset.u = '';                        // 清空相对路径前缀
+    asset.p = winImageMap[asset.p];      // 替换为 Vite 解析后的绝对 URL
+    asset.e = 1;                         // 标记为外部 URL（lottie 直接用 src）
+  }
+}
 
 const lobby = document.querySelector<HTMLElement>('#lobby')!;
 const arena = document.querySelector<HTMLElement>('#arena')!;
@@ -18,6 +45,10 @@ const startGame = document.querySelector<HTMLButtonElement>('#start-game')!;
 const result = document.querySelector<HTMLElement>('#result')!;
 const resultText = document.querySelector<HTMLElement>('#result-text')!;
 const restart = document.querySelector<HTMLButtonElement>('#restart')!;
+const winLottie = document.querySelector<HTMLElement>('#win-lottie')!;
+
+let winAnim: AnimationItem | null = null;
+let winPlayed = false; // 每局只播放一次，重开时重置
 
 const client = new GameClient(import.meta.env.VITE_SERVER_URL as string | undefined);
 let playerId = '';
@@ -57,6 +88,8 @@ startGame.addEventListener('click', () => client.startGame());
 
 restart.addEventListener('click', () => {
   result.hidden = true;
+  stopWinAnim();
+  winPlayed = false; // 重置标志，下一局可重新播放
   client.restart();
 });
 
@@ -100,14 +133,44 @@ function renderSnapshot(snapshot: GameSnapshot): void {
   result.hidden = false;
   if (!snapshot.winnerId) {
     resultText.textContent = '平局';
+    stopWinAnim();
   } else if (snapshot.winnerId === playerId) {
     resultText.textContent = '你赢了';
+    playWinAnim();
   } else {
     const winner = snapshot.players.find((player) => player.id === snapshot.winnerId);
     resultText.textContent = `${winner?.name ?? '其他玩家'} 获胜`;
+    stopWinAnim();
   }
 }
 
 window.addEventListener('beforeunload', () => {
   game?.destroy(true);
+  stopWinAnim();
 });
+
+/** 在 #win-lottie 容器中播放胜利动画（每局只播放一次） */
+function playWinAnim(): void {
+  if (winPlayed) return; // 已播放过，不再重复
+  winPlayed = true;
+  winLottie.hidden = false;
+  if (winAnim) {
+    winAnim.goToAndPlay(0, true);
+    return;
+  }
+  winAnim = lottie.loadAnimation({
+    container: winLottie,
+    renderer: 'svg',
+    loop: false,
+    autoplay: true,
+    animationData: winData,
+  });
+}
+
+/** 停止并隐藏胜利动画 */
+function stopWinAnim(): void {
+  if (winAnim) {
+    winAnim.stop();
+  }
+  winLottie.hidden = true;
+}

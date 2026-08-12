@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@ktank/shared": "workspace:*",
+    "lottie-web": "^5.13.0",
     "phaser": "^3.90.0",
     "socket.io-client": "^4.8.1"
   },

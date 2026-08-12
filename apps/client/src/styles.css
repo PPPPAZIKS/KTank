@@ -231,6 +231,16 @@ header strong {
   box-shadow: 0 20px 70px rgba(0, 0, 0, 0.65);
 }
 
+#win-lottie {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  width: 414px;
+  height: 350px;
+  transform: translate(-50%, -58%);
+  pointer-events: none;
+  z-index: 3;
+}
+
 #result strong {
   display: block;
   margin-bottom: 18px;
