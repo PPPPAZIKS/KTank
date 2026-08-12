@@ -23,18 +23,27 @@ export function registerSocketHandlers(
         callback({ ok: false, message: '当前连接已加入房间' });
         return;
       }
-      const room = manager.getOrCreateRoom(request.roomId);
-      if (!room.addPlayer(socket.id, request.name)) {
-        const message = room.snapshot().status === 'waiting' ? '房间已满' : '对局已经开始';
+      const existingRoom = manager.getRoom(request.roomId);
+      if (existingRoom?.isConnected(request.sessionId)) {
+        callback({ ok: false, message: '该玩家已在房间中' });
+        return;
+      }
+      const resumedRoom = manager.reconnectPlayer(request.roomId, request.sessionId, request.name, socket.id);
+      const room = resumedRoom ?? manager.getOrCreateRoom(request.roomId);
+      if (!resumedRoom && !room.addPlayer(request.sessionId, request.name, socket.id)) {
+        const status = room.snapshot().status;
+        const message = status === 'waiting' || status === 'finished' ? '房间已满' : '对局已经开始';
         callback({ ok: false, message });
         return;
       }
       socket.data.roomId = request.roomId;
-      socket.data.playerId = socket.id;
+      socket.data.playerId = request.sessionId;
+      socket.data.intentionalLeave = false;
       void socket.join(request.roomId);
       const snapshot = room.snapshot();
-      callback({ ok: true, playerId: socket.id, snapshot });
+      callback({ ok: true, playerId: request.sessionId, sessionId: request.sessionId, snapshot });
       io.to(request.roomId).emit('snapshot', snapshot);
+      process.stdout.write(`${resumedRoom ? 'reconnect' : 'join'} room=${request.roomId} player=${request.sessionId}\n`);
     });
 
     socket.on('playerInput', (rawInput) => {
@@ -78,17 +87,32 @@ export function registerSocketHandlers(
       }
       const room = manager.getRoom(roomId);
       if (!room?.restart(playerId)) {
-        socket.emit('notice', '只有房主能在本局结束后重新开始');
+        socket.emit('notice', '仅房主可在本局结束且至少 2 人在线时重新开始');
         return;
       }
       io.to(roomId).emit('snapshot', room.snapshot());
     });
 
-    socket.on('disconnect', () => {
+    socket.on('leaveRoom', (callback) => {
       const roomId = socket.data.roomId;
       const playerId = socket.data.playerId;
+      socket.data.intentionalLeave = true;
       if (roomId && playerId) {
-        manager.removePlayer(roomId, playerId);
+        void socket.leave(roomId);
+        manager.scheduleDisconnect(roomId, playerId, socket.id);
+        process.stdout.write(`leave room=${roomId} player=${playerId} grace=30s\n`);
+      }
+      socket.data.roomId = undefined;
+      socket.data.playerId = undefined;
+      callback();
+    });
+
+    socket.on('disconnect', (reason) => {
+      const roomId = socket.data.roomId;
+      const playerId = socket.data.playerId;
+      if (roomId && playerId && !socket.data.intentionalLeave) {
+        manager.scheduleDisconnect(roomId, playerId, socket.id);
+        process.stdout.write(`disconnect room=${roomId} player=${playerId} reason=${reason}\n`);
       }
     });
   });

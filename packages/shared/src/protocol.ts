@@ -11,6 +11,7 @@ export interface TankState extends Vector2 {
   angle: number;
   health: number;
   alive: boolean;
+  connected: boolean;
   color: number;
 }
 
@@ -48,10 +49,11 @@ export interface PlayerInput {
 export interface JoinRequest {
   roomId: string;
   name: string;
+  sessionId: string;
 }
 
 export type JoinResponse =
-  | { ok: true; playerId: string; snapshot: GameSnapshot }
+  | { ok: true; playerId: string; sessionId: string; snapshot: GameSnapshot }
   | { ok: false; message: string };
 
 export interface ClientToServerEvents {
@@ -60,6 +62,7 @@ export interface ClientToServerEvents {
   fire: () => void;
   startGame: () => void;
   restart: () => void;
+  leaveRoom: (callback: () => void) => void;
 }
 
 export interface ServerToClientEvents {
@@ -72,4 +75,5 @@ export type InterServerEvents = Record<string, never>;
 export interface SocketData {
   roomId?: string;
   playerId?: string;
+  intentionalLeave?: boolean;
 }

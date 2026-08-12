@@ -57,6 +57,60 @@ describe('GameRoom', () => {
     expect(snapshot.players.find((player) => player.id === 'two')?.alive).toBe(false);
     expect(snapshot.winnerId).toBe('one');
     expect(snapshot.status).toBe('finished');
+    expect(room.restart('two')).toBe(false);
+    expect(room.restart('one')).toBe(true);
+    expect(room.snapshot().status).toBe('playing');
+    expect(room.snapshot().players.every((player) => player.alive)).toBe(true);
+  });
+
+  it('断线保留期间冻结血量并在重连后恢复', () => {
+    const room = new GameRoom('ABC');
+    room.addPlayer('one', 'One', 'socket-one');
+    room.addPlayer('two', 'Two', 'socket-two');
+    room.start('one');
+    room.setInput('one', input({ down: true }));
+    room.update(110 / 180);
+    room.setInput('one', input({ sequence: 2, angle: 0 }));
+    room.setInput('two', input({ up: true, angle: Math.PI }));
+    room.update(350 / 180);
+    room.setInput('two', input({ sequence: 2, angle: Math.PI }));
+    const healthBeforeDisconnect = room.snapshot().players.find((player) => player.id === 'two')?.health;
+
+    expect(room.markDisconnected('two', 'socket-two')).toBe(true);
+    expect(room.fire('one', 1000)).toBe(true);
+    for (let tick = 0; tick < 130; tick += 1) {
+      room.update(1 / 60);
+    }
+    expect(room.snapshot().players.find((player) => player.id === 'two')?.health).toBe(healthBeforeDisconnect);
+
+    expect(room.reconnectPlayer('two', 'Two', 'socket-two-new')).toBe(true);
+    const restored = room.snapshot().players.find((player) => player.id === 'two');
+    expect(restored?.connected).toBe(true);
+    expect(restored?.alive).toBe(true);
+    expect(restored?.health).toBe(healthBeforeDisconnect);
+  });
+
+  it('允许进行中退出的玩家重新加入并等待下一局', () => {
+    const room = new GameRoom('ABC');
+    room.addPlayer('one', 'One');
+    room.addPlayer('two', 'Two');
+    room.addPlayer('three', 'Three');
+    room.start('one');
+    room.removePlayer('two');
+    expect(room.addPlayer('two-new', 'Two')).toBe(true);
+    const rejoined = room.snapshot().players.find((player) => player.id === 'two-new');
+    expect(rejoined?.connected).toBe(true);
+    expect(rejoined?.alive).toBe(false);
+    expect(rejoined?.health).toBe(0);
+    expect(room.snapshot().status).toBe('playing');
+  });
+
+  it('忽略旧连接在玩家重连后的延迟断开', () => {
+    const room = new GameRoom('ABC');
+    room.addPlayer('one', 'One', 'socket-old');
+    room.reconnectPlayer('one', 'One', 'socket-new');
+    expect(room.markDisconnected('one', 'socket-old')).toBe(false);
+    expect(room.snapshot().players[0]?.connected).toBe(true);
   });
 
   it('支持四个唯一槽位并在断线后安全补位', () => {

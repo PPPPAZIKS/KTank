@@ -21,7 +21,7 @@
       <section id="arena" hidden>
         <header>
           <div><strong id="room-label"></strong><span id="connection">连接中</span></div>
-          <div class="controls">WASD / 方向键移动 · 鼠标瞄准 · 点击或空格射击</div>
+          <div class="header-actions"><span class="controls">WASD / 方向键移动 · 鼠标瞄准 · 点击或空格射击</span><button id="leave-room" class="secondary" type="button">退出房间</button></div>
         </header>
         <section id="room-panel">
           <div class="room-panel-title"><strong id="player-count">玩家 0/4</strong><span>支持 2～4 人对战</span></div>
@@ -29,6 +29,8 @@
           <button id="start-game" type="button" hidden>开始游戏</button>
         </section>
         <div id="game"></div>
+        <div id="network-overlay" hidden><strong>连接已中断</strong><span>正在尝试恢复对局…</span></div>
+        <div id="toast" role="status" hidden></div>
         <div id="result" hidden>
           <strong id="result-text"></strong>
           <button id="restart" type="button">再来一局</button>
