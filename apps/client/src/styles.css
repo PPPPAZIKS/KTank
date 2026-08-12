@@ -128,6 +128,19 @@ header strong {
   font-size: 18px;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+button.secondary {
+  padding: 7px 11px;
+  color: #d8e8f5;
+  border: 1px solid #45627a;
+  background: transparent;
+}
+
 #connection,
 .controls {
   color: #8faac1;
@@ -215,6 +228,46 @@ header strong {
   display: block;
   width: 100%;
   height: auto;
+}
+
+#network-overlay {
+  position: absolute;
+  inset: 112px 0 0;
+  z-index: 3;
+  display: grid;
+  place-content: center;
+  gap: 8px;
+  text-align: center;
+  background: rgba(7, 16, 25, 0.78);
+  backdrop-filter: blur(3px);
+}
+
+#network-overlay[hidden],
+#toast[hidden] {
+  display: none;
+}
+
+#network-overlay strong {
+  font-size: 28px;
+}
+
+#network-overlay span {
+  color: #a8bfd3;
+}
+
+#toast {
+  position: fixed;
+  top: 22px;
+  left: 50%;
+  z-index: 5;
+  max-width: min(460px, calc(100% - 32px));
+  padding: 11px 16px;
+  transform: translateX(-50%);
+  border: 1px solid #607991;
+  border-radius: 9px;
+  color: #ffffff;
+  background: #172b3d;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
 }
 
 #result {

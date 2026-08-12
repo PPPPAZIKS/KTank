@@ -20,6 +20,7 @@ import { circleHitsRectangle, circlesOverlap } from './collision.js';
 
 interface PlayerRecord extends TankState {
   slot: number;
+  connectionId: string;
   input: PlayerInput;
   lastFireAt: number;
 }
@@ -62,10 +63,12 @@ export class GameRoom {
     return this.players.size;
   }
 
-  addPlayer(id: string, name: string): boolean {
-    if (this.status !== 'waiting' || this.players.size >= MAX_PLAYERS || this.players.has(id)) {
+  addPlayer(id: string, name: string, connectionId = id): boolean {
+    if (this.players.size >= MAX_PLAYERS || this.players.has(id)) {
       return false;
     }
+    const joiningNextRound = this.status === 'finished';
+    const joiningInProgress = this.status === 'playing';
     const usedSlots = new Set([...this.players.values()].map((player) => player.slot));
     const slot = SPAWNS.findIndex((_, index) => !usedSlots.has(index));
     const spawn = SPAWNS[slot];
@@ -76,17 +79,47 @@ export class GameRoom {
       id,
       name,
       slot,
+      connectionId,
       x: spawn.x,
       y: spawn.y,
       angle: spawn.angle,
-      health: PLAYER_MAX_HEALTH,
-      alive: true,
+      health: joiningInProgress ? 0 : PLAYER_MAX_HEALTH,
+      alive: !joiningInProgress,
+      connected: true,
       color: COLORS[slot] ?? 0xffffff,
       input: { ...EMPTY_INPUT, angle: spawn.angle },
       lastFireAt: 0
     });
     this.hostId ??= id;
+    if (joiningNextRound) {
+      this.prepareWaitingRoom();
+    }
     return true;
+  }
+
+  reconnectPlayer(id: string, name: string, connectionId = id): boolean {
+    const player = this.players.get(id);
+    if (!player) {
+      return false;
+    }
+    player.connected = true;
+    player.connectionId = connectionId;
+    player.name = name;
+    return true;
+  }
+
+  markDisconnected(id: string, connectionId = id): boolean {
+    const player = this.players.get(id);
+    if (!player || player.connectionId !== connectionId) {
+      return false;
+    }
+    player.connected = false;
+    player.input = { ...EMPTY_INPUT, angle: player.angle };
+    return true;
+  }
+
+  isConnected(id: string): boolean {
+    return this.players.get(id)?.connected === true;
   }
 
   removePlayer(id: string): void {
@@ -110,7 +143,12 @@ export class GameRoom {
   }
 
   start(requesterId: string): boolean {
-    if (this.status !== 'waiting' || requesterId !== this.hostId || this.players.size < 2) {
+    if (
+      this.status !== 'waiting' ||
+      requesterId !== this.hostId ||
+      this.players.size < 2 ||
+      [...this.players.values()].some((player) => !player.connected)
+    ) {
       return false;
     }
     this.resetPlayers();
@@ -120,7 +158,7 @@ export class GameRoom {
 
   setInput(id: string, input: PlayerInput): void {
     const player = this.players.get(id);
-    if (this.status !== 'playing' || !player || !player.alive || input.sequence < player.input.sequence) {
+    if (this.status !== 'playing' || !player || !player.connected || !player.alive || input.sequence <= player.input.sequence) {
       return;
     }
     player.input = input;
@@ -128,7 +166,7 @@ export class GameRoom {
 
   fire(id: string, now = Date.now()): boolean {
     const player = this.players.get(id);
-    if (this.status !== 'playing' || !player || !player.alive || now - player.lastFireAt < FIRE_COOLDOWN_MS) {
+    if (this.status !== 'playing' || !player || !player.connected || !player.alive || now - player.lastFireAt < FIRE_COOLDOWN_MS) {
       return false;
     }
     player.lastFireAt = now;
@@ -159,7 +197,15 @@ export class GameRoom {
   }
 
   restart(requesterId: string): boolean {
-    if (this.status !== 'finished' || requesterId !== this.hostId || this.players.size < 2) {
+    if (this.status !== 'finished' || requesterId !== this.hostId) {
+      return false;
+    }
+    for (const player of [...this.players.values()]) {
+      if (!player.connected) {
+        this.removePlayer(player.id);
+      }
+    }
+    if (this.players.size < 2) {
       return false;
     }
     this.resetPlayers();
@@ -180,6 +226,7 @@ export class GameRoom {
         angle: player.angle,
         health: player.health,
         alive: player.alive,
+        connected: player.connected,
         color: player.color
       })),
       bullets: [...this.bullets.values()].map((bullet) => ({
@@ -192,6 +239,11 @@ export class GameRoom {
       winnerId: this.winnerId,
       serverTime: now
     };
+  }
+
+  private prepareWaitingRoom(): void {
+    this.resetPlayers();
+    this.status = 'waiting';
   }
 
   private resetPlayers(): void {
@@ -207,6 +259,7 @@ export class GameRoom {
       player.angle = spawn.angle;
       player.health = PLAYER_MAX_HEALTH;
       player.alive = true;
+      player.connected = true;
       player.input = { ...EMPTY_INPUT, angle: spawn.angle };
       player.lastFireAt = 0;
     }
@@ -248,7 +301,7 @@ export class GameRoom {
         continue;
       }
       for (const player of this.players.values()) {
-        if (!player.alive || player.id === bullet.ownerId) {
+        if (!player.connected || !player.alive || player.id === bullet.ownerId) {
           continue;
         }
         if (circlesOverlap(bullet, BULLET_RADIUS, player, TANK_RADIUS)) {

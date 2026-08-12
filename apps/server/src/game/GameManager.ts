@@ -11,6 +11,7 @@ import { GameRoom } from './GameRoom.js';
 
 export class GameManager {
   private readonly rooms = new Map<string, GameRoom>();
+  private readonly disconnectTimers = new Map<string, NodeJS.Timeout>();
   private loopTimer?: NodeJS.Timeout;
   private snapshotTimer?: NodeJS.Timeout;
   private lastUpdateAt = Date.now();
@@ -32,7 +33,46 @@ export class GameManager {
     return this.rooms.get(roomId);
   }
 
+  reconnectPlayer(roomId: string, playerId: string, name: string, connectionId: string): GameRoom | undefined {
+    const room = this.rooms.get(roomId);
+    if (!room?.reconnectPlayer(playerId, name, connectionId)) {
+      return undefined;
+    }
+    const key = this.disconnectKey(roomId, playerId);
+    const timer = this.disconnectTimers.get(key);
+    if (timer) {
+      clearTimeout(timer);
+      this.disconnectTimers.delete(key);
+    }
+    return room;
+  }
+
+  scheduleDisconnect(roomId: string, playerId: string, connectionId: string, graceMs = 30_000): void {
+    const room = this.rooms.get(roomId);
+    if (!room?.markDisconnected(playerId, connectionId)) {
+      return;
+    }
+    this.io.to(roomId).emit('snapshot', room.snapshot());
+    const key = this.disconnectKey(roomId, playerId);
+    const existing = this.disconnectTimers.get(key);
+    if (existing) {
+      clearTimeout(existing);
+    }
+    this.disconnectTimers.set(key, setTimeout(() => {
+      this.disconnectTimers.delete(key);
+      if (!room.isConnected(playerId)) {
+        this.removePlayer(roomId, playerId);
+      }
+    }, graceMs));
+  }
+
   removePlayer(roomId: string, playerId: string): void {
+    const key = this.disconnectKey(roomId, playerId);
+    const timer = this.disconnectTimers.get(key);
+    if (timer) {
+      clearTimeout(timer);
+      this.disconnectTimers.delete(key);
+    }
     const room = this.rooms.get(roomId);
     if (!room) {
       return;
@@ -65,7 +105,15 @@ export class GameManager {
     }, 1000 / SNAPSHOT_RATE);
   }
 
+  private disconnectKey(roomId: string, playerId: string): string {
+    return `${roomId}:${playerId}`;
+  }
+
   stop(): void {
+    for (const timer of this.disconnectTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.disconnectTimers.clear();
     if (this.loopTimer) {
       clearInterval(this.loopTimer);
       this.loopTimer = undefined;
