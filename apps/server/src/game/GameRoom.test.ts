@@ -16,7 +16,7 @@ function input(overrides: Partial<Parameters<GameRoom['setInput']>[1]> = {}) {
 
 describe('GameRoom', () => {
   it('等待房主开局后才允许移动', () => {
-    const room = new GameRoom('ABC');
+    const room = new GameRoom('ABC', () => []);
     room.addPlayer('one', 'One');
     room.addPlayer('two', 'Two');
     room.setInput('one', input({ left: true }));
@@ -30,7 +30,7 @@ describe('GameRoom', () => {
   });
 
   it('处理射击命中并产生一致胜负结果', () => {
-    const room = new GameRoom('ABC');
+    const room = new GameRoom('ABC', () => []);
     room.addPlayer('one', 'One');
     room.addPlayer('two', 'Two');
     room.start('one');

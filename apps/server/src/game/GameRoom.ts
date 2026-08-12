@@ -5,13 +5,15 @@ import {
   GAME_HEIGHT,
   GAME_WIDTH,
   MAX_PLAYERS,
-  OBSTACLES,
   PLAYER_MAX_HEALTH,
   TANK_RADIUS,
   TANK_SPEED,
+  generateObstacles,
   type BulletState,
   type GameSnapshot,
   type GameStatus,
+  type ImpactState,
+  type ObstacleState,
   type PlayerInput,
   type TankState
 } from '@ktank/shared';
@@ -47,15 +49,22 @@ const EMPTY_INPUT: PlayerInput = {
   angle: 0
 };
 
+type ObstacleFactory = () => ObstacleState[];
+
 export class GameRoom {
   readonly id: string;
   private readonly players = new Map<string, PlayerRecord>();
   private readonly bullets = new Map<string, BulletRecord>();
+  private obstacles: ObstacleState[] = [];
+  private impacts: ImpactState[] = [];
   private status: GameStatus = 'waiting';
   private hostId: string | null = null;
   private winnerId: string | null = null;
 
-  constructor(id: string) {
+  constructor(
+    id: string,
+    private readonly obstacleFactory: ObstacleFactory = () => generateObstacles(SPAWNS)
+  ) {
     this.id = id;
   }
 
@@ -152,6 +161,8 @@ export class GameRoom {
       return false;
     }
     this.resetPlayers();
+    this.obstacles = this.obstacleFactory();
+    this.impacts = [];
     this.status = 'playing';
     return true;
   }
@@ -209,11 +220,15 @@ export class GameRoom {
       return false;
     }
     this.resetPlayers();
+    this.obstacles = this.obstacleFactory();
+    this.impacts = [];
     this.status = 'playing';
     return true;
   }
 
   snapshot(now = Date.now()): GameSnapshot {
+    const impacts = this.impacts.map((impact) => ({ ...impact }));
+    this.impacts = [];
     return {
       roomId: this.id,
       status: this.status,
@@ -235,7 +250,8 @@ export class GameRoom {
         x: bullet.x,
         y: bullet.y
       })),
-      obstacles: OBSTACLES.map((obstacle) => ({ ...obstacle })),
+      obstacles: this.obstacles.map((obstacle) => ({ ...obstacle })),
+      impacts,
       winnerId: this.winnerId,
       serverTime: now
     };
@@ -280,7 +296,7 @@ export class GameRoom {
     const nextX = Math.max(TANK_RADIUS, Math.min(GAME_WIDTH - TANK_RADIUS, player.x + directionX * TANK_SPEED * deltaSeconds));
     const nextY = Math.max(TANK_RADIUS, Math.min(GAME_HEIGHT - TANK_RADIUS, player.y + directionY * TANK_SPEED * deltaSeconds));
     const nextPosition = { x: nextX, y: nextY };
-    const hitsObstacle = OBSTACLES.some((obstacle) => circleHitsRectangle(nextPosition, TANK_RADIUS, obstacle));
+    const hitsObstacle = this.obstacles.some((obstacle) => circleHitsRectangle(nextPosition, TANK_RADIUS, obstacle));
     const hitsPlayer = [...this.players.values()].some(
       (other) => other.id !== player.id && other.alive && circlesOverlap(nextPosition, TANK_RADIUS, other, TANK_RADIUS)
     );
@@ -295,8 +311,16 @@ export class GameRoom {
       bullet.x += bullet.velocityX * deltaSeconds;
       bullet.y += bullet.velocityY * deltaSeconds;
       const outside = bullet.x < 0 || bullet.x > GAME_WIDTH || bullet.y < 0 || bullet.y > GAME_HEIGHT;
-      const hitObstacle = OBSTACLES.some((obstacle) => circleHitsRectangle(bullet, BULLET_RADIUS, obstacle));
+      const hitObstacle = this.obstacles.some((obstacle) => circleHitsRectangle(bullet, BULLET_RADIUS, obstacle));
       if (outside || hitObstacle) {
+        if (outside || hitObstacle) {
+          this.impacts.push({
+            id: randomUUID(),
+            kind: 'obstacle',
+            x: Math.max(0, Math.min(GAME_WIDTH, bullet.x)),
+            y: Math.max(0, Math.min(GAME_HEIGHT, bullet.y))
+          });
+        }
         this.bullets.delete(bulletId);
         continue;
       }
@@ -307,6 +331,7 @@ export class GameRoom {
         if (circlesOverlap(bullet, BULLET_RADIUS, player, TANK_RADIUS)) {
           player.health -= 1;
           player.alive = player.health > 0;
+          this.impacts.push({ id: randomUUID(), kind: 'tank', x: player.x, y: player.y });
           this.bullets.delete(bulletId);
           break;
         }

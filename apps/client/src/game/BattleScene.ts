@@ -1,4 +1,5 @@
 import {
+  BULLET_RADIUS,
   GAME_HEIGHT,
   GAME_WIDTH,
   PLAYER_MAX_HEALTH,
@@ -8,25 +9,17 @@ import {
 } from '@ktank/shared';
 import Phaser from 'phaser';
 import type { GameClient } from '../network';
-import tank0Url from '../assets/tanks/tank-0.png';
-import tank1Url from '../assets/tanks/tank-1.png';
-import tank2Url from '../assets/tanks/tank-2.png';
-import tank3Url from '../assets/tanks/tank-3.png';
-import boomUrl from '../assets/effects/boom_4*4.png';
-
-/**
- * 解析命名格式 "xxx_RxC.ext"（如 boom_4*4.png）中的行列数。
- * 取文件名最后一个 _ 之后的部分，支持 * / x / × 作为分隔符。
- * 格式约定：行数在前，列数在后，例如 4*4 → rows=4, cols=4。
- */
-function parseGridFromFilename(url: string): { cols: number; rows: number } {
-  const filename = url.split('/').pop()!.replace(/\.[^.]+$/, '');
-  const segment = filename.split('_').pop() ?? '1x1';
-  const parts = segment.split(/[*x×]/i);
-  const rows = parseInt(parts[0] ?? '1', 10);
-  const cols = parseInt(parts[1] ?? parts[0] ?? '1', 10);
-  return { cols, rows };
-}
+import body0Url from '../assets/tanks/body-0.png';
+import body1Url from '../assets/tanks/body-1.png';
+import body2Url from '../assets/tanks/body-2.png';
+import body3Url from '../assets/tanks/body-3.png';
+import gun0Url from '../assets/tanks/gun-0.png';
+import gun1Url from '../assets/tanks/gun-1.png';
+import gun2Url from '../assets/tanks/gun-2.png';
+import gun3Url from '../assets/tanks/gun-3.png';
+import obstacle0Url from '../assets/obstacles/obstacle-0.png';
+import obstacle1Url from '../assets/obstacles/obstacle-1.png';
+import groundUrl from '../assets/maps/ground.png';
 
 // 服务器按槽位分配的颜色 → 对应素材编号
 const colorToTankIndex: Record<number, number> = {
@@ -36,40 +29,53 @@ const colorToTankIndex: Record<number, number> = {
   0xffc857: 3  // 黄
 };
 
-// 素材默认炮口朝下（屏幕 +y），逻辑 angle=0 表示炮口朝右 → 逆时针转 90°
-const TANK_TEX_ROTATION_OFFSET = -Math.PI / 2;
-// 贴合物理碰撞半径 TANK_RADIUS=18，渲染宽度取直径 36
+// 炮塔素材默认炮管朝下，炮塔中心作为旋转锚点；逻辑 angle=0 表示朝右
+const GUN_TEX_OFFSET = -Math.PI / 2;
+// 车身素材默认朝上，移动方向需要加 90° 映射到 Phaser 旋转坐标
+const BODY_TEX_OFFSET = Math.PI / 2;
 const TANK_TEX_WIDTH = TANK_RADIUS * 2;
 
-// 激光束长度和宽度
-const LASER_LENGTH = 30;
-const LASER_OUTER_WIDTH = 7;
-const LASER_INNER_WIDTH = 3;
+const BODY_KEYS = ['tankBody0', 'tankBody1', 'tankBody2', 'tankBody3'];
+const GUN_KEYS = ['tankGun0', 'tankGun1', 'tankGun2', 'tankGun3'];
+const BODY_URLS = [body0Url, body1Url, body2Url, body3Url];
+const GUN_URLS = [gun0Url, gun1Url, gun2Url, gun3Url];
+
+// 裁剪图内的真实旋转锚点：车身黑洞中心、炮塔圆心
+const BODY_PIVOTS = [
+  { x: 159, y: 194 },
+  { x: 158, y: 195 },
+  { x: 158, y: 195 },
+  { x: 159, y: 194 }
+];
+const GUN_PIVOTS = [
+  { x: 79, y: 76 },
+  { x: 79, y: 76 },
+  { x: 79, y: 76 },
+  { x: 79, y: 76 }
+];
 
 interface TankView {
   body: Phaser.GameObjects.Container;
+  bodyLayer: Phaser.GameObjects.Container;
+  turretLayer: Phaser.GameObjects.Container;
+  car: Phaser.GameObjects.Image;
+  turret: Phaser.GameObjects.Image;
   healthBar: Phaser.GameObjects.Graphics;
   name: Phaser.GameObjects.Text;
 }
 
-interface BulletView {
-  laser: Phaser.GameObjects.Graphics;
-  color: number;
-  prevX: number;
-  prevY: number;
-  /** 方向是否已确定（至少有两帧位置） */
-  hasDirX: number;
-  hasDirY: number;
-}
-
 export class BattleScene extends Phaser.Scene {
   private readonly tanks = new Map<string, TankView>();
-  private readonly bullets = new Map<string, BulletView>();
+  private readonly bullets = new Map<string, Phaser.GameObjects.Arc>();
+  private readonly obstacleViews = new Map<string, Phaser.GameObjects.Image>();
+  private readonly obstacleSigs = new Map<string, string>();
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd!: Record<'up' | 'down' | 'left' | 'right' | 'fire', Phaser.Input.Keyboard.Key>;
   private latestSnapshot?: GameSnapshot;
   private previousHealth = new Map<string, number>();
-  private previousAlive = new Map<string, boolean>();
+  private previousPositions = new Map<string, { x: number; y: number }>();
+  private impactIds = new Set<string>();
+  private bodyAngles = new Map<string, number>();
   private sequence = 0;
   private lastSentInput = '';
 
@@ -82,19 +88,23 @@ export class BattleScene extends Phaser.Scene {
   }
 
   preload(): void {
-    this.load.image('tank0', tank0Url);
-    this.load.image('tank1', tank1Url);
-    this.load.image('tank2', tank2Url);
-    this.load.image('tank3', tank3Url);
-    // 先以普通图片加载，create() 中再切割帧
-    this.load.image('boom', boomUrl);
+    this.load.image('ground', groundUrl);
+    for (let i = 0; i < BODY_URLS.length; i++) {
+      this.load.image(BODY_KEYS[i]!, BODY_URLS[i]);
+      this.load.image(GUN_KEYS[i]!, GUN_URLS[i]);
+    }
+    this.load.image('obstacle0', obstacle0Url);
+    this.load.image('obstacle1', obstacle1Url);
   }
 
   create(): void {
     this.cameras.main.setBackgroundColor(0x101824);
+    this.add
+      .image(GAME_WIDTH / 2, GAME_HEIGHT / 2, 'ground')
+      .setOrigin(0.5)
+      .setDisplaySize(GAME_WIDTH, GAME_HEIGHT)
+      .setDepth(0);
     this.drawGrid();
-    // 解析 boom 图集并注册序列帧动画
-    this.setupFrameAnimation('boom', boomUrl, { frameRate: 14, scale: 0.5 });
     this.cursors = this.input.keyboard!.createCursorKeys();
     this.wasd = this.input.keyboard!.addKeys({
       up: Phaser.Input.Keyboard.KeyCodes.W,
@@ -153,11 +163,27 @@ export class BattleScene extends Phaser.Scene {
 
   private syncSnapshot(snapshot: GameSnapshot): void {
     for (const obstacle of snapshot.obstacles) {
-      if (!this.children.getByName(obstacle.id)) {
-        this.add.rectangle(obstacle.x, obstacle.y, obstacle.width, obstacle.height, 0x38495b)
-          .setOrigin(0)
-          .setStrokeStyle(3, 0x607991)
-          .setName(obstacle.id);
+      let view = this.obstacleViews.get(obstacle.id);
+      if (!view) {
+        view = this.add.image(0, 0, obstacle.type === 1 ? 'obstacle1' : 'obstacle0').setOrigin(0.5);
+        this.obstacleViews.set(obstacle.id, view);
+        this.obstacleSigs.set(obstacle.id, '');
+      }
+      // 同一 id 的位置/尺寸/类型变化时同步更新（restart 后布局会变）
+      const sig = `${obstacle.x},${obstacle.y},${obstacle.width},${obstacle.height},${obstacle.type ?? 0}`;
+      if (this.obstacleSigs.get(obstacle.id) !== sig) {
+        view.setPosition(obstacle.x + obstacle.width / 2, obstacle.y + obstacle.height / 2);
+        view.setDisplaySize(obstacle.width, obstacle.height);
+        view.setTexture(obstacle.type === 1 ? 'obstacle1' : 'obstacle0');
+        this.obstacleSigs.set(obstacle.id, sig);
+      }
+    }
+    // 清理快照中已不存在的障碍物（布局数量变化时）
+    for (const [id, view] of this.obstacleViews) {
+      if (!snapshot.obstacles.some((obstacle) => obstacle.id === id)) {
+        view.destroy();
+        this.obstacleViews.delete(id);
+        this.obstacleSigs.delete(id);
       }
     }
 
@@ -177,179 +203,88 @@ export class BattleScene extends Phaser.Scene {
         view = this.createTank(player.id, player.color, player.name);
         this.tanks.set(player.id, view);
       }
+      // 车体朝移动方向，炮管独立朝瞄准方向
+      const prevPos = this.previousPositions.get(player.id);
+      let bodyAngle = this.bodyAngles.get(player.id) ?? 0;
+      if (prevPos && (player.x !== prevPos.x || player.y !== prevPos.y)) {
+        bodyAngle = Math.atan2(player.y - prevPos.y, player.x - prevPos.x);
+        this.bodyAngles.set(player.id, bodyAngle);
+      }
+      this.previousPositions.set(player.id, { x: player.x, y: player.y });
       view.body.setPosition(player.x, player.y)
-        .setRotation(player.angle + TANK_TEX_ROTATION_OFFSET)
+        .setRotation(bodyAngle)
         .setAlpha(player.alive ? 1 : 0.22);
-      view.name.setPosition(player.x, player.y - 39).setText(player.id === this.playerId ? `${player.name}（你）` : player.name);
-      this.drawHealth(view.healthBar, player.x, player.y - 28, player.health);
+      view.bodyLayer.setRotation(BODY_TEX_OFFSET);
+      view.turretLayer.setRotation(player.angle + GUN_TEX_OFFSET - bodyAngle);
+      view.name.setPosition(player.x, player.y - 46).setText(player.id === this.playerId ? `${player.name}（你）` : player.name);
+      this.drawHealth(view.healthBar, player.x, player.y - 38, player.health);
       const oldHealth = this.previousHealth.get(player.id);
       if (oldHealth !== undefined && oldHealth > player.health) {
         this.showHit(player.x, player.y);
       }
       this.previousHealth.set(player.id, player.health);
-
-      // 检测死亡（alive: true → false）时播放爆炸动画
-      const wasAlive = this.previousAlive.get(player.id);
-      if (wasAlive === true && !player.alive) {
-        this.playBoomAt(player.x, player.y);
-      }
-      this.previousAlive.set(player.id, player.alive);
     }
 
-    // 建立 ownerId → 颜色 快速查找表
-    const ownerColor = new Map<string, number>();
-    for (const player of snapshot.players) {
-      ownerColor.set(player.id, player.color);
+    for (const impact of snapshot.impacts) {
+      if (this.impactIds.has(impact.id)) continue;
+      this.impactIds.add(impact.id);
+      this.showHit(impact.x, impact.y);
+    }
+    if (this.impactIds.size > 256) {
+      this.impactIds = new Set(snapshot.impacts.map((impact) => impact.id));
     }
 
     const bulletIds = new Set(snapshot.bullets.map((bullet) => bullet.id));
-    for (const [id, view] of this.bullets) {
+    for (const [id, bullet] of this.bullets) {
       if (!bulletIds.has(id)) {
-        view.laser.destroy();
+        bullet.destroy();
         this.bullets.delete(id);
       }
     }
-
     for (const bullet of snapshot.bullets) {
-      const color = ownerColor.get(bullet.ownerId) ?? 0xffffff;
       let view = this.bullets.get(bullet.id);
-
       if (!view) {
-        const laser = this.add.graphics();
-        // 用发射者的炮管朝向作为初始方向
-        const owner = snapshot.players.find((p) => p.id === bullet.ownerId);
-        const initAngle = owner?.angle ?? 0;
-        view = {
-          laser,
-          color,
-          prevX: bullet.x - Math.cos(initAngle),
-          prevY: bullet.y - Math.sin(initAngle),
-          hasDirX: Math.cos(initAngle),
-          hasDirY: Math.sin(initAngle)
-        };
+        view = this.add.circle(bullet.x, bullet.y, BULLET_RADIUS, 0xffd166).setStrokeStyle(2, 0xfff2bd);
         this.bullets.set(bullet.id, view);
       }
-
-      // 用当前帧与上一帧位置差分计算方向
-      const dx = bullet.x - view.prevX;
-      const dy = bullet.y - view.prevY;
-      const len = Math.sqrt(dx * dx + dy * dy);
-      if (len > 0.5) {
-        view.hasDirX = dx / len;
-        view.hasDirY = dy / len;
-      }
-
-      view.prevX = bullet.x;
-      view.prevY = bullet.y;
-
-      this.drawLaser(view.laser, bullet.x, bullet.y, view.hasDirX, view.hasDirY, color);
+      view.setPosition(bullet.x, bullet.y);
     }
 
     this.onSnapshot(snapshot);
   }
 
-  /**
-   * 在 (x, y) 位置沿方向 (ux, uy) 绘制短激光束。
-   * 弹头在前端，向后延伸 LASER_LENGTH 像素。
-   * 两层：外光晕（坦克颜色半透明宽线）+ 内芯（亮白细线）。
-   */
-  private drawLaser(
-    g: Phaser.GameObjects.Graphics,
-    x: number,
-    y: number,
-    ux: number,
-    uy: number,
-    color: number
-  ): void {
-    g.clear();
-    const tailX = x - ux * LASER_LENGTH;
-    const tailY = y - uy * LASER_LENGTH;
-
-    // 外光晕层：坦克颜色，深色
-    g.lineStyle(LASER_OUTER_WIDTH, color, 0.85);
-    g.beginPath();
-    g.moveTo(x, y);
-    g.lineTo(tailX, tailY);
-    g.strokePath();
-
-    // 内芯层：亮白，高不透明
-    g.lineStyle(LASER_INNER_WIDTH, 0xffffff, 0.95);
-    g.beginPath();
-    g.moveTo(x, y);
-    g.lineTo(tailX, tailY);
-    g.strokePath();
-  }
-
   private createTank(id: string, color: number, name: string): TankView {
     const tankIdx = colorToTankIndex[color] ?? 0;
-    const sprite = this.add.image(0, 0, `tank${tankIdx}`).setOrigin(0.5);
-    sprite.setScale(TANK_TEX_WIDTH / sprite.width);
+    const pivot = BODY_PIVOTS[tankIdx]!;
+    const car = this.add.image(0, 0, BODY_KEYS[tankIdx]!).setOrigin(0);
+    const scale = TANK_TEX_WIDTH / car.width;
+    car.setScale(scale);
+    car.setPosition(-pivot.x * scale, -pivot.y * scale);
+    const turretPivot = GUN_PIVOTS[tankIdx]!;
+    const turret = this.add.image(0, 0, GUN_KEYS[tankIdx]!).setOrigin(0);
+    turret.setScale(scale);
+    turret.setPosition(-turretPivot.x * scale, -turretPivot.y * scale);
     const shadow = this.add.ellipse(3, 5, 44, 30, 0x000000, 0.35);
-    const container = this.add.container(0, 0, [shadow, sprite]).setName(id);
+    const bodyContainer = this.add.container(0, 0, [shadow, car]);
+    const turretContainer = this.add.container(0, 0, [turret]);
+    const container = this.add.container(0, 0, [bodyContainer, turretContainer]).setName(id);
     const healthBar = this.add.graphics();
     const label = this.add.text(0, 0, name, {
       fontFamily: 'system-ui, sans-serif',
       fontSize: '13px',
-      color: '#eaf4ff'
-    }).setOrigin(0.5);
-    return { body: container, healthBar, name: label };
+      color: '#eaf4ff',
+      stroke: '#0b1320',
+      strokeThickness: 4
+    }).setOrigin(0.5).setDepth(100);
+    return { body: container, bodyLayer: bodyContainer, turretLayer: turretContainer, car, turret, healthBar, name: label };
   }
 
   private drawHealth(graphics: Phaser.GameObjects.Graphics, x: number, y: number, health: number): void {
     graphics.clear();
+    graphics.setDepth(99);
     graphics.fillStyle(0x071019, 0.9).fillRoundedRect(x - 20, y, 40, 6, 3);
     const ratio = Math.max(0, health / PLAYER_MAX_HEALTH);
     graphics.fillStyle(ratio > 0.35 ? 0x59db88 : 0xff5f6d).fillRoundedRect(x - 19, y + 1, 38 * ratio, 4, 2);
-  }
-
-  /**
-   * 将已加载的普通纹理按命名约定切割为序列帧，并注册动画。
-   * @param key     纹理 key（需已在 preload 中 load.image）
-   * @param url     原始 URL（用于从文件名解析行列数）
-   * @param options 动画选项：帧率、缩放
-   */
-  private setupFrameAnimation(
-    key: string,
-    url: string,
-    options: { frameRate?: number; scale?: number } = {}
-  ): void {
-    const { cols, rows } = parseGridFromFilename(url);
-    const tex = this.textures.get(key);
-    const totalW = tex.source[0]!.width;
-    const totalH = tex.source[0]!.height;
-    const frameW = Math.floor(totalW / cols);
-    const frameH = Math.floor(totalH / rows);
-
-    // 手动向纹理添加数字索引帧
-    let idx = 0;
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        tex.add(idx++, 0, c * frameW, r * frameH, frameW, frameH);
-      }
-    }
-
-    this.anims.create({
-      key,
-      frames: Array.from({ length: rows * cols }, (_, i) => ({ key, frame: i })),
-      frameRate: options.frameRate ?? 12,
-      repeat: 0
-    });
-
-    // 保存缩放比供 playBoomAt 使用
-    if (options.scale !== undefined) {
-      this.registry.set(`${key}_scale`, options.scale);
-    }
-  }
-
-  /**
-   * 在指定位置播放一次爆炸序列帧动画，播放完毕后自动销毁。
-   */
-  private playBoomAt(x: number, y: number): void {
-    const scale = (this.registry.get('boom_scale') as number | undefined) ?? 1;
-    const sprite = this.add.sprite(x, y, 'boom', 0);
-    sprite.setScale(scale);
-    sprite.play('boom');
-    sprite.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => sprite.destroy());
   }
 
   private showHit(x: number, y: number): void {

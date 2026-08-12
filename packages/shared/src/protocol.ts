@@ -24,6 +24,12 @@ export interface ObstacleState extends Vector2 {
   id: string;
   width: number;
   height: number;
+  type?: number;
+}
+
+export interface ImpactState extends Vector2 {
+  id: string;
+  kind: 'obstacle' | 'tank';
 }
 
 export interface GameSnapshot {
@@ -32,6 +38,7 @@ export interface GameSnapshot {
   hostId: string | null;
   players: TankState[];
   bullets: BulletState[];
+  impacts: ImpactState[];
   obstacles: ObstacleState[];
   winnerId: string | null;
   serverTime: number;
