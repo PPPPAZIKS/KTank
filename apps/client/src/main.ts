@@ -12,7 +12,6 @@ import winImg4 from './assets/effects/win/images/img_4.png';
 import './styles.css';
 
 // 将 assets 中的图片 URL 注入到 animationData，避免 Vite hash 后路径失效
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const winImageMap: Record<string, string> = {
   'img_0.png': winImg0,
   'img_1.png': winImg1,
@@ -176,44 +175,6 @@ function renderSnapshot(snapshot: GameSnapshot): void {
     resultText.textContent = `${winner?.name ?? '其他玩家'} 获胜`;
     stopWinAnim();
   }
-}
-
-function renderConnection(state: ConnectionState): void {
-  const inRoom = !arena.hidden;
-  if (state === 'connected') {
-    networkOverlay.hidden = true;
-    if (latestSnapshot) {
-      renderSnapshot(latestSnapshot);
-    }
-    return;
-  }
-  if (!inRoom) {
-    if (state === 'failed') {
-      error.textContent = '无法连接服务器，请检查服务是否启动';
-    }
-    return;
-  }
-  networkOverlay.hidden = false;
-  const title = networkOverlay.querySelector('strong')!;
-  const detail = networkOverlay.querySelector('span')!;
-  if (state === 'failed') {
-    title.textContent = '连接失败';
-    detail.textContent = '请检查网络，刷新页面后重试';
-  } else {
-    title.textContent = '连接已中断';
-    detail.textContent = '正在尝试恢复对局…';
-  }
-}
-
-function showToast(message: string): void {
-  toast.textContent = message;
-  toast.hidden = false;
-  if (toastTimer !== undefined) {
-    window.clearTimeout(toastTimer);
-  }
-  toastTimer = window.setTimeout(() => {
-    toast.hidden = true;
-  }, 3500);
 }
 
 function renderConnection(state: ConnectionState): void {
