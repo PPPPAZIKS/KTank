@@ -19,7 +19,7 @@ const result = document.querySelector<HTMLElement>('#result')!;
 const resultText = document.querySelector<HTMLElement>('#result-text')!;
 const restart = document.querySelector<HTMLButtonElement>('#restart')!;
 
-const client = new GameClient(import.meta.env.VITE_SERVER_URL ?? 'http://localhost:3001');
+const client = new GameClient(import.meta.env.VITE_SERVER_URL as string | undefined);
 let playerId = '';
 let game: Phaser.Game | undefined;
 let scene: BattleScene | undefined;
