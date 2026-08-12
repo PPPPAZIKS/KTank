@@ -9,6 +9,23 @@ import {
 } from '@ktank/shared';
 import Phaser from 'phaser';
 import type { GameClient } from '../network';
+import tank0Url from '../assets/tanks/tank-0.png';
+import tank1Url from '../assets/tanks/tank-1.png';
+import tank2Url from '../assets/tanks/tank-2.png';
+import tank3Url from '../assets/tanks/tank-3.png';
+
+// 服务器按槽位分配的颜色 → 对应素材编号
+const colorToTankIndex: Record<number, number> = {
+  0x45a3ff: 0, // 蓝
+  0xff5f6d: 1, // 红
+  0x4fd18b: 2, // 绿
+  0xffc857: 3  // 黄
+};
+
+// 素材默认炮口朝下（屏幕 +y），逻辑 angle=0 表示炮口朝右 → 逆时针转 90°
+const TANK_TEX_ROTATION_OFFSET = -Math.PI / 2;
+// 贴合物理碰撞半径 TANK_RADIUS=18，渲染宽度取直径 36
+const TANK_TEX_WIDTH = TANK_RADIUS * 2;
 
 interface TankView {
   body: Phaser.GameObjects.Container;
@@ -32,6 +49,13 @@ export class BattleScene extends Phaser.Scene {
     private readonly onSnapshot: (snapshot: GameSnapshot) => void
   ) {
     super('battle');
+  }
+
+  preload(): void {
+    this.load.image('tank0', tank0Url);
+    this.load.image('tank1', tank1Url);
+    this.load.image('tank2', tank2Url);
+    this.load.image('tank3', tank3Url);
   }
 
   create(): void {
@@ -119,7 +143,9 @@ export class BattleScene extends Phaser.Scene {
         view = this.createTank(player.id, player.color, player.name);
         this.tanks.set(player.id, view);
       }
-      view.body.setPosition(player.x, player.y).setRotation(player.angle).setAlpha(player.alive ? 1 : 0.22);
+      view.body.setPosition(player.x, player.y)
+        .setRotation(player.angle + TANK_TEX_ROTATION_OFFSET)
+        .setAlpha(player.alive ? 1 : 0.22);
       view.name.setPosition(player.x, player.y - 39).setText(player.id === this.playerId ? `${player.name}（你）` : player.name);
       this.drawHealth(view.healthBar, player.x, player.y - 28, player.health);
       const oldHealth = this.previousHealth.get(player.id);
@@ -149,11 +175,11 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private createTank(id: string, color: number, name: string): TankView {
+    const tankIdx = colorToTankIndex[color] ?? 0;
+    const sprite = this.add.image(0, 0, `tank${tankIdx}`).setOrigin(0.5);
+    sprite.setScale(TANK_TEX_WIDTH / sprite.width);
     const shadow = this.add.ellipse(3, 5, 44, 30, 0x000000, 0.35);
-    const body = this.add.rectangle(0, 0, TANK_RADIUS * 2, TANK_RADIUS * 1.65, color).setStrokeStyle(3, 0xe5f1ff);
-    const turret = this.add.rectangle(15, 0, 30, 7, 0xd9e7f5).setOrigin(0.15, 0.5);
-    const hub = this.add.circle(0, 0, 8, 0x182536).setStrokeStyle(2, 0xffffff);
-    const container = this.add.container(0, 0, [shadow, body, turret, hub]).setName(id);
+    const container = this.add.container(0, 0, [shadow, sprite]).setName(id);
     const healthBar = this.add.graphics();
     const label = this.add.text(0, 0, name, {
       fontFamily: 'system-ui, sans-serif',
