@@ -1,5 +1,4 @@
 import {
-  BULLET_RADIUS,
   GAME_HEIGHT,
   GAME_WIDTH,
   PLAYER_MAX_HEALTH,
@@ -20,6 +19,7 @@ import gun3Url from '../assets/tanks/gun-3.png';
 import obstacle0Url from '../assets/obstacles/obstacle-0.png';
 import obstacle1Url from '../assets/obstacles/obstacle-1.png';
 import groundUrl from '../assets/maps/ground.png';
+import boomUrl from '../assets/effects/boom_4*4.png';
 
 // 服务器按槽位分配的颜色 → 对应素材编号
 const colorToTankIndex: Record<number, number> = {
@@ -54,6 +54,20 @@ const GUN_PIVOTS = [
   { x: 79, y: 76 }
 ];
 
+// 激光束常量
+const LASER_LENGTH = 30;
+const LASER_OUTER_WIDTH = 7;
+const LASER_INNER_WIDTH = 3;
+
+interface BulletView {
+  laser: Phaser.GameObjects.Graphics;
+  color: number;
+  prevX: number;
+  prevY: number;
+  hasDirX: number;
+  hasDirY: number;
+}
+
 interface TankView {
   body: Phaser.GameObjects.Container;
   bodyLayer: Phaser.GameObjects.Container;
@@ -66,13 +80,14 @@ interface TankView {
 
 export class BattleScene extends Phaser.Scene {
   private readonly tanks = new Map<string, TankView>();
-  private readonly bullets = new Map<string, Phaser.GameObjects.Arc>();
+  private readonly bullets = new Map<string, BulletView>();
   private readonly obstacleViews = new Map<string, Phaser.GameObjects.Image>();
   private readonly obstacleSigs = new Map<string, string>();
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd!: Record<'up' | 'down' | 'left' | 'right' | 'fire', Phaser.Input.Keyboard.Key>;
   private latestSnapshot?: GameSnapshot;
   private previousHealth = new Map<string, number>();
+  private previousAlive = new Map<string, boolean>();
   private previousPositions = new Map<string, { x: number; y: number }>();
   private impactIds = new Set<string>();
   private bodyAngles = new Map<string, number>();
@@ -95,6 +110,7 @@ export class BattleScene extends Phaser.Scene {
     }
     this.load.image('obstacle0', obstacle0Url);
     this.load.image('obstacle1', obstacle1Url);
+    this.load.image('boom', boomUrl);
   }
 
   create(): void {
@@ -119,6 +135,7 @@ export class BattleScene extends Phaser.Scene {
       this.latestSnapshot = snapshot;
       this.syncSnapshot(snapshot);
     });
+    this.setupFrameAnimation('boom', boomUrl, { frameRate: 14, scale: 0.5 });
   }
 
   update(): void {
@@ -223,6 +240,12 @@ export class BattleScene extends Phaser.Scene {
         this.showHit(player.x, player.y);
       }
       this.previousHealth.set(player.id, player.health);
+      // 检测死亡事件：alive true → false 时播放爆炸
+      const wasAlive = this.previousAlive.get(player.id);
+      if (wasAlive === true && !player.alive) {
+        this.playAnimAt('boom', player.x, player.y);
+      }
+      this.previousAlive.set(player.id, player.alive);
     }
 
     for (const impact of snapshot.impacts) {
@@ -235,19 +258,32 @@ export class BattleScene extends Phaser.Scene {
     }
 
     const bulletIds = new Set(snapshot.bullets.map((bullet) => bullet.id));
-    for (const [id, bullet] of this.bullets) {
+    for (const [id, view] of this.bullets) {
       if (!bulletIds.has(id)) {
-        bullet.destroy();
+        view.laser.destroy();
         this.bullets.delete(id);
       }
     }
     for (const bullet of snapshot.bullets) {
+      const owner = snapshot.players.find((p) => p.id === bullet.ownerId);
+      const color = owner?.color ?? 0xffffff;
       let view = this.bullets.get(bullet.id);
       if (!view) {
-        view = this.add.circle(bullet.x, bullet.y, BULLET_RADIUS, 0xffd166).setStrokeStyle(2, 0xfff2bd);
+        const laser = this.add.graphics();
+        view = { laser, color, prevX: bullet.x, prevY: bullet.y, hasDirX: 1, hasDirY: 0 };
         this.bullets.set(bullet.id, view);
       }
-      view.setPosition(bullet.x, bullet.y);
+      // 由位移计算方向单位向量
+      const dx = bullet.x - view.prevX;
+      const dy = bullet.y - view.prevY;
+      const len = Math.hypot(dx, dy);
+      if (len > 0.1) {
+        view.hasDirX = dx / len;
+        view.hasDirY = dy / len;
+      }
+      view.prevX = bullet.x;
+      view.prevY = bullet.y;
+      this.drawLaser(view.laser, bullet.x, bullet.y, view.hasDirX, view.hasDirY, color);
     }
 
     this.onSnapshot(snapshot);
@@ -285,6 +321,76 @@ export class BattleScene extends Phaser.Scene {
     graphics.fillStyle(0x071019, 0.9).fillRoundedRect(x - 20, y, 40, 6, 3);
     const ratio = Math.max(0, health / PLAYER_MAX_HEALTH);
     graphics.fillStyle(ratio > 0.35 ? 0x59db88 : 0xff5f6d).fillRoundedRect(x - 19, y + 1, 38 * ratio, 4, 2);
+  }
+
+  // ─── 激光束绘制 ──────────────────────────────────────────────────
+  private drawLaser(
+    g: Phaser.GameObjects.Graphics,
+    x: number,
+    y: number,
+    ux: number,
+    uy: number,
+    color: number
+  ): void {
+    g.clear();
+    const tailX = x - ux * LASER_LENGTH;
+    const tailY = y - uy * LASER_LENGTH;
+    g.lineStyle(LASER_OUTER_WIDTH, color, 0.85);
+    g.beginPath();
+    g.moveTo(x, y);
+    g.lineTo(tailX, tailY);
+    g.strokePath();
+    g.lineStyle(LASER_INNER_WIDTH, 0xffffff, 0.95);
+    g.beginPath();
+    g.moveTo(x, y);
+    g.lineTo(tailX, tailY);
+    g.strokePath();
+  }
+
+  // ─── 序列帧工具函数 ───────────────────────────────────────────────
+  private parseGridFromFilename(url: string): { rows: number; cols: number } {
+    const filename = url.split('/').pop()!.replace(/\.[^.]+$/, '');
+    const segment = filename.split('_').pop() ?? '1x1';
+    const parts = segment.split(/[*x×]/i);
+    const rows = parseInt(parts[0] ?? '1', 10);
+    const cols = parseInt(parts[1] ?? parts[0] ?? '1', 10);
+    return { rows, cols };
+  }
+
+  private setupFrameAnimation(
+    key: string,
+    url: string,
+    options: { frameRate?: number; scale?: number; repeat?: number } = {}
+  ): void {
+    const { cols, rows } = this.parseGridFromFilename(url);
+    const tex = this.textures.get(key);
+    const totalW = tex.source[0]!.width;
+    const totalH = tex.source[0]!.height;
+    const frameW = Math.floor(totalW / cols);
+    const frameH = Math.floor(totalH / rows);
+    let idx = 0;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        tex.add(idx++, 0, c * frameW, r * frameH, frameW, frameH);
+      }
+    }
+    this.anims.create({
+      key,
+      frames: Array.from({ length: rows * cols }, (_, i) => ({ key, frame: i })),
+      frameRate: options.frameRate ?? 12,
+      repeat: options.repeat ?? 0
+    });
+    if (options.scale !== undefined) {
+      this.registry.set(`${key}_scale`, options.scale);
+    }
+  }
+
+  private playAnimAt(key: string, x: number, y: number): void {
+    const scale = (this.registry.get(`${key}_scale`) as number | undefined) ?? 1;
+    const sprite = this.add.sprite(x, y, key, 0);
+    sprite.setScale(scale);
+    sprite.play(key);
+    sprite.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => sprite.destroy());
   }
 
   private showHit(x: number, y: number): void {
